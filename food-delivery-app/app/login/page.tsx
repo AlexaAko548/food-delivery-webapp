@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, GithubAuthProvider } from "firebase/auth";
+import { signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider} from "firebase/auth";
 import { auth } from "../../firebase/clientApp";
 
 export default function LoginPage() {
@@ -41,16 +41,6 @@ export default function LoginPage() {
     }
   }; 
 
-  const handleGithubLogin = async () => {
-    setError("");
-    const provider = new GithubAuthProvider();
-    try {
-      await signInWithPopup(auth, provider);
-      router.push("/");
-    } catch (err:any) {
-      setError("GitHub sign-in failed. Please try again.");
-    }
-  };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#F8F5F1] p-4">
@@ -110,15 +100,6 @@ export default function LoginPage() {
         >
           <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-5 h-5" />
           Continue with Google
-        </button>
-
-        <button
-          type="button"
-          className="w-full py-3 mb-4 flex items-center justify-center gap-3 border border-[#EAE0D5] rounded-full font-bold text-[#5c4033] bg-white hover:bg-[#F8F5F1] transition-colors shadow-sm"
-          onClick={handleGithubLogin}
-        >
-          <img src="https://github.githubassets.com/favicon.ico" alt="GitHub" className="w-5 h-5" />
-          Continue with GitHub
         </button>
 
         <p className="text-center text-[#8c7361] mt-8">
