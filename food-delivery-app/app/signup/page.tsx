@@ -4,6 +4,8 @@ import { createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup, on
 import { auth } from "../../firebase/clientApp"; 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { doc, setDoc } from "firebase/firestore";
+import { db } from "../../firebase/clientApp";
 
 export default function SignupPage() {
   const [email, setEmail] = useState("");
@@ -46,8 +48,14 @@ export default function SignupPage() {
     }
 
     try {
-      await createUserWithEmailAndPassword(auth, email, password);
-      router.push("/home"); 
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+      await setDoc(doc(db, "users", user.uid), {
+        username,
+        email,
+        createdAt: new Date(),
+      });
+      router.push("/");
     } catch (err:any) {
       if (err.code === "auth/email-already-in-use") {
         setError("An account with this email already exists.");
