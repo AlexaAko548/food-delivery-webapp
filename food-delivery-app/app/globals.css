@@ -1,8 +1,17 @@
 @import "tailwindcss";
 
 :root {
+  /* Default Next.js */
   --background: #ffffff;
   --foreground: #171717;
+
+  /* Our Custom Food Delivery Theme */
+  --color-brand-bg: #F8F5F1;
+  --color-brand-text: #5c4033;
+  --color-brand-muted: #8c7361;
+  --color-brand-border: #EAE0D5;
+  --color-brand-primary: #a67c52;
+  --color-brand-primary-hover: #8c6239;
 }
 
 @theme inline {
@@ -10,6 +19,14 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  
+  /* Tell Tailwind about our new colors */
+  --color-brand-bg: var(--color-brand-bg);
+  --color-brand-text: var(--color-brand-text);
+  --color-brand-muted: var(--color-brand-muted);
+  --color-brand-border: var(--color-brand-border);
+  --color-brand-primary: var(--color-brand-primary);
+  --color-brand-primary-hover: var(--color-brand-primary-hover);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -20,7 +37,7 @@
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--color-brand-bg); /* Applies our cream background globally */
+  color: var(--color-brand-text);    /* Applies our dark brown text globally */
   font-family: Arial, Helvetica, sans-serif;
 }
