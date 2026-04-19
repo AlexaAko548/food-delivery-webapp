@@ -4,6 +4,8 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, onAuthStateChanged } from "firebase/auth";
 import { auth } from "../../firebase/clientApp"; 
+import { doc, setDoc } from "firebase/firestore";
+import { db } from "../../firebase/clientApp";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -53,7 +55,14 @@ export default function LoginPage() {
     setError("");
     const provider = new GoogleAuthProvider();
     try {
-      await signInWithPopup(auth, provider);
+      const userCredential = await signInWithPopup(auth, provider);
+      const user = userCredential.user;
+
+      await setDoc(doc(db, "users", user.uid), {
+        username: user.displayName,
+        email: user.email,
+        createdAt: new Date(),
+      }, { merge: true });
       router.push("/home"); 
     } catch (err:any) {
       setError("Google sign-in failed. Please try again.");
