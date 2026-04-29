@@ -1,9 +1,15 @@
 "use client";
 import Link from "next/link";
 import { useState, useEffect } from "react";
+import { sendPasswordResetEmail } from "firebase/auth";
+import { auth } from "@/firebase/clientApp";
 
 export default function ForgotPasswordPage() {
   const [currentSlide, setCurrentSlide] = useState(0);
+  const [email, setEmail] = useState("");
+  const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [errorMessage, setErrorMessage] = useState("");
+
   const slides = ["Placeholder Image 1", "Placeholder Image 2", "Placeholder Image 3"];
 
   useEffect(() => {
@@ -12,6 +18,31 @@ export default function ForgotPasswordPage() {
     }, 3000);
     return () => clearInterval(timer);
   }, [slides.length]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setStatus("loading");
+    setErrorMessage("");
+
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setStatus("success");
+    } catch (error: unknown) {
+      setStatus("error");
+      if (error instanceof Error) {
+        const code = (error as { code?: string }).code;
+        if (code === "auth/user-not-found") {
+          setErrorMessage("No account found with this email.");
+        } else if (code === "auth/invalid-email") {
+          setErrorMessage("Please enter a valid email address.");
+        } else if (code === "auth/too-many-requests") {
+          setErrorMessage("Too many attempts. Please try again later.");
+        } else {
+          setErrorMessage("Something went wrong. Please try again.");
+        }
+      }
+    }
+  };
 
   return (
     <div className="min-h-screen flex flex-col bg-[#EAE3D9]">
@@ -25,33 +56,68 @@ export default function ForgotPasswordPage() {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        
         <div className="w-full md:w-1/2 flex flex-col justify-center relative p-8">
           <div className="absolute top-20 left-20 w-64 h-64 bg-[#DCD1C4] rounded-full mix-blend-multiply filter blur-3xl opacity-60"></div>
           <div className="absolute bottom-20 right-20 w-72 h-72 bg-[#DCD1C4] rounded-full mix-blend-multiply filter blur-3xl opacity-60"></div>
 
           <div className="max-w-sm mx-auto w-full relative z-10">
-            <h2 className="text-4xl font-bold text-[#5C3A21] mb-12 text-center">Forgot Password</h2>
-            
-            <form className="space-y-6" onSubmit={(e) => e.preventDefault()}>
-              <input
-                type="email"
-                placeholder="Email"
-                className="w-full px-6 py-3 rounded-full border border-[#A68A72] bg-transparent text-[#5C3A21] placeholder:text-[#A68A72] focus:outline-none focus:ring-2 focus:ring-[#6A4423] transition-all shadow-[inset_0_2px_4px_rgba(0,0,0,0.02)]"
-                required
-              />
+            <h2 className="text-4xl font-bold text-[#5C3A21] mb-4 text-center">Forgot Password</h2>
 
-              <div className="pt-6 flex justify-center">
+            {status === "success" ? (
+              <div className="text-center space-y-6 mt-8">
+                <div className="flex items-center justify-center w-16 h-16 mx-auto rounded-full bg-[#6A4423]/10">
+                  <svg className="w-8 h-8 text-[#6A4423]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <p className="text-[#5C3A21] font-semibold text-lg">Check your email</p>
+                <p className="text-[#A68A72] text-sm">
+                  We sent a password reset link to <span className="font-medium text-[#5C3A21]">{email}</span>.
+                  Check your inbox and follow the instructions.
+                </p>
                 <button
-                  type="submit"
-                  className="w-1/2 py-3 bg-[#6A4423] hover:bg-[#523318] text-white rounded-full font-semibold shadow-md transition-colors"
+                  onClick={() => { setStatus("idle"); setEmail(""); }}
+                  className="text-sm text-[#8A6B52] hover:text-[#5C3A21] transition-colors underline underline-offset-2"
                 >
-                  Send Email
+                  Try a different email
                 </button>
               </div>
-            </form>
+            ) : (
+              <>
+                <p className="text-[#A68A72] text-sm text-center mb-8">
+                  Enter your email and we'll send you a link to reset your password.
+                </p>
 
-            <div className="mt-20 text-center">
+                <form className="space-y-6" onSubmit={handleSubmit}>
+                  <input
+                    type="email"
+                    placeholder="Email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full px-6 py-3 rounded-full border border-[#A68A72] bg-transparent text-[#5C3A21] placeholder:text-[#A68A72] focus:outline-none focus:ring-2 focus:ring-[#6A4423] transition-all shadow-[inset_0_2px_4px_rgba(0,0,0,0.02)]"
+                    required
+                    disabled={status === "loading"}
+                  />
+
+                  {}
+                  {status === "error" && (
+                    <p className="text-red-500 text-sm text-center">{errorMessage}</p>
+                  )}
+
+                  <div className="pt-4 flex justify-center">
+                    <button
+                      type="submit"
+                      disabled={status === "loading"}
+                      className="w-1/2 py-3 bg-[#6A4423] hover:bg-[#523318] text-white rounded-full font-semibold shadow-md transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {status === "loading" ? "Sending..." : "Send Email"}
+                    </button>
+                  </div>
+                </form>
+              </>
+            )}
+
+            <div className="mt-16 text-center">
               <Link href="/login" className="text-sm text-[#8A6B52] hover:text-[#5C3A21] transition-colors">
                 Back to Sign in
               </Link>
@@ -66,7 +132,6 @@ export default function ForgotPasswordPage() {
             </span>
           </div>
         </div>
-
       </div>
     </div>
   );
