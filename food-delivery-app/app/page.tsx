@@ -6,16 +6,14 @@ import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "../firebase/clientApp";
 
 export default function LandingPage() {
-  // Slideshow logic for the placeholder
   const [currentSlide, setCurrentSlide] = useState(0);
   const slides = ["Placeholder Image 1", "Placeholder Image 2", "Placeholder Image 3"];
   const router = useRouter();
 
-  // If a user is already logged in, send them straight to the app
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
-        router.push("/home"); // We will create this route in Step 2
+        router.push("/home"); 
       }
     });
     return () => unsubscribe();

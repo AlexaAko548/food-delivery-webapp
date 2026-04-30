@@ -1,10 +1,17 @@
 "use client";
 import Link from "next/link";
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
-import { auth } from "../../firebase/clientApp"; 
+import { auth, db } from "../../firebase/clientApp";
+import {
+  collection, getDocs, query, orderBy,
+  where, limit,
+} from "firebase/firestore";
 import Header from "../components/Header";
+import CartSidebar from "../components/CartSidebar";
+import { useCart } from "../../context/CartContext";
 
 const CATEGORIES = [
   { name: "Pasta", icon: "🍝" },
@@ -13,21 +20,109 @@ const CATEGORIES = [
   { name: "Drinks", icon: "🥤" },
 ];
 
+interface MenuItem {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  imageURL?: string;
+  category?: string;
+  limited?: boolean;
+}
+
+interface PopupItem extends MenuItem {}
+
 export default function HomePage() {
   const router = useRouter();
-  const [loading, setLoading] = useState(true);
+  const { setCartOpen, totalItems, addToCart } = useCart();
 
-  // Route Protection only (Identity is handled inside Header)
+  const [loading, setLoading] = useState(true);
+  const [lastOrderItems, setLastOrderItems] = useState<MenuItem[]>([]);
+  const [limitedItems, setLimitedItems] = useState<MenuItem[]>([]);
+  const [mostOrderedItems, setMostOrderedItems] = useState<MenuItem[]>([]);
+  const [popupItem, setPopupItem] = useState<PopupItem | null>(null);
+  const [popupQty, setPopupQty] = useState(1);
+
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) {
         router.push("/login");
-      } else {
-        setLoading(false);
+        return;
       }
+      let allMenu: MenuItem[] = [];
+      try {
+        const menuSnap = await getDocs(query(collection(db, "menu"), orderBy("name")));
+        allMenu = menuSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as MenuItem[];
+      } catch (err) {
+        console.error("Error fetching menu:", err);
+      }
+
+      try {
+        const ordersQ = query(
+          collection(db, "orders"),
+          where("uid", "==", user.uid),
+          orderBy("createdAt", "desc"),
+          limit(1)
+        );
+        const ordersSnap = await getDocs(ordersQ);
+        if (!ordersSnap.empty) {
+          const lastOrder = ordersSnap.docs[0].data();
+          setLastOrderItems(lastOrder.items || []);
+        }
+      } catch (err: any) {
+        console.error("Error fetching last order (composite index missing?):", err?.message || err);
+      }
+
+      try {
+        const limited = allMenu.filter((item) => item.limited === true);
+        setLimitedItems(limited);
+      } catch (err) {
+        console.error("Error filtering limited items:", err);
+      }
+
+      try {
+        const allOrdersSnap = await getDocs(collection(db, "orders"));
+        const countMap: Record<string, number> = {};
+        allOrdersSnap.docs.forEach((doc) => {
+          const items = doc.data().items || [];
+          items.forEach((item: MenuItem & { quantity: number }) => {
+            countMap[item.id] = (countMap[item.id] || 0) + (item.quantity || 1);
+          });
+        });
+
+        const sorted = [...allMenu]
+          .filter((item) => countMap[item.id] > 0) 
+          .sort((a, b) => (countMap[b.id] || 0) - (countMap[a.id] || 0))
+          .slice(0, 3);
+        setMostOrderedItems(sorted);
+      } catch (err) {
+        console.error("Error fetching most ordered (check Firestore rules):", err);
+      }
+
+      setLoading(false);
     });
     return () => unsubscribe();
   }, [router]);
+
+  const openPopup = (item: MenuItem) => {
+    setPopupItem(item);
+    setPopupQty(1);
+  };
+
+  const handleAddFromPopup = () => {
+    if (!popupItem) return;
+    for (let i = 0; i < popupQty; i++) {
+      addToCart({
+        id: popupItem.id,
+        name: popupItem.name,
+        price: popupItem.price,
+        imageURL: popupItem.imageURL,
+        category: popupItem.category,
+        description: popupItem.description,
+      });
+    }
+    setPopupItem(null);
+  };
 
   if (loading) {
     return (
@@ -42,24 +137,55 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen bg-[#F9FAFB] flex flex-col">
-      
-      {/* 1. Hero Section */}
+
+      <CartSidebar />
+
+      {/* Item Popup */}
+      {popupItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setPopupItem(null)} />
+          <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden z-10">
+            <div className="relative h-56 w-full bg-[#EAE0D5]">
+{popupItem.imageURL ? (
+                <Image src={popupItem.imageURL} alt={popupItem.name} fill sizes="(max-width: 768px) 100vw, 448px" className="object-cover" />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-6xl">🍽️</div>
+              )}
+              <button
+                onClick={() => setPopupItem(null)}
+                className="absolute top-3 right-3 w-8 h-8 bg-white rounded-full flex items-center justify-center text-gray-500 hover:text-gray-800 shadow-md text-lg"
+              >×</button>
+            </div>
+            <div className="p-6">
+              <h2 className="text-2xl font-bold text-[#5c4033] mb-1">{popupItem.name}</h2>
+              <p className="text-xl font-bold text-[#8A6B52] mb-3">₱{popupItem.price}</p>
+              <p className="text-sm text-gray-500 mb-6 leading-relaxed">{popupItem.description || "No description available."}</p>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-3 bg-[#F8F5F1] rounded-2xl px-4 py-2">
+                  <button onClick={() => setPopupQty((q) => Math.max(1, q - 1))} className="w-7 h-7 rounded-full bg-[#EAE0D5] text-[#5c4033] font-bold hover:bg-[#d4c5b2] transition flex items-center justify-center">−</button>
+                  <span className="font-bold text-[#5c4033] w-5 text-center">{popupQty}</span>
+                  <button onClick={() => setPopupQty((q) => q + 1)} className="w-7 h-7 rounded-full bg-[#5c4033] text-white font-bold hover:bg-[#3e2c22] transition flex items-center justify-center">+</button>
+                </div>
+                <button
+                  onClick={handleAddFromPopup}
+                  className="flex-1 py-3 bg-[#5c4033] text-white rounded-2xl font-bold hover:bg-[#3e2c22] transition"
+                >
+                  Add to Cart · ₱{(popupItem.price * popupQty).toFixed(0)}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hero */}
       <section className="relative h-[65vh] min-h-[500px] w-full bg-[#3a3028] flex flex-col items-center justify-center overflow-hidden">
-        <div 
-          className="absolute inset-0 bg-cover bg-center opacity-40 mix-blend-overlay"
-          style={{ backgroundImage: "url('/top.webp')" }}
-        ></div>
-
-        {/* --- THE IMPORTED HEADER --- */}
+        <div className="absolute inset-0 bg-cover bg-center opacity-40 mix-blend-overlay" style={{ backgroundImage: "url('/top.webp')" }} />
         <Header />
-
-        {/* Hero Content */}
         <div className="relative z-10 w-full max-w-4xl px-4 flex flex-col items-center mt-12">
           <h1 className="text-4xl md:text-5xl font-extrabold text-white mb-8 text-center drop-shadow-md">
             What are you craving today?
           </h1>
-
-          {/* Search Bar */}
           <div className="flex w-full max-w-2xl gap-3 mb-12">
             <div className="relative flex-1">
               <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
@@ -67,107 +193,87 @@ export default function HomePage() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                 </svg>
               </div>
-              <input 
-                type="text" 
-                placeholder="Pasta? Bread? Something sweet?" 
-                className="w-full pl-12 pr-4 py-4 rounded-full bg-[#E7E2DE] text-[#5C3A21] placeholder:text-[#8A6B52] focus:outline-none focus:ring-4 focus:ring-[#6A4423]/50 transition-all font-medium"
-              />
+              <input type="text" placeholder="Pasta? Bread? Something sweet?" className="w-full pl-12 pr-4 py-4 rounded-full bg-[#E7E2DE] text-[#5C3A21] placeholder:text-[#8A6B52] focus:outline-none focus:ring-4 focus:ring-[#6A4423]/50 transition-all font-medium" />
             </div>
-            <button className="px-8 py-4 bg-[#997855] hover:bg-[#745b40] text-white rounded-full font-bold shadow-lg transition-colors">
-              Search
-            </button>
+            <button className="px-8 py-4 bg-[#997855] hover:bg-[#745b40] text-white rounded-full font-bold shadow-lg transition-colors">Search</button>
           </div>
-
-          {/* Categories - Now linked to dynamic routes */}
           <div className="flex flex-wrap justify-center gap-6 md:gap-10">
             {CATEGORIES.map((cat, index) => (
-              <Link 
-                key={index} 
-                href={`/${cat.name.toLowerCase()}`}
-                className="flex flex-col items-center gap-2 group cursor-pointer"
-              >
-                <div className="w-16 h-16 rounded-full bg-[#DCD1C4] border-2 border-white/20 flex items-center justify-center text-3xl shadow-lg group-hover:scale-110 group-hover:bg-white transition-all">
-                  {cat.icon}
-                </div>
-                <span className="text-white text-sm font-semibold drop-shadow-md group-hover:text-[#DCD1C4] transition-colors">
-                  {cat.name}
-                </span>
+              <Link key={index} href={`/${cat.name.toLowerCase()}`} className="flex flex-col items-center gap-2 group cursor-pointer">
+                <div className="w-16 h-16 rounded-full bg-[#DCD1C4] border-2 border-white/20 flex items-center justify-center text-3xl shadow-lg group-hover:scale-110 group-hover:bg-white transition-all">{cat.icon}</div>
+                <span className="text-white text-sm font-semibold drop-shadow-md group-hover:text-[#DCD1C4] transition-colors">{cat.name}</span>
               </Link>
             ))}
           </div>
         </div>
       </section>
 
-      {/* 2. Your Last Order Section */}
+      {/* Your Last Order */}
       <section className="w-full bg-[#E7E2DE] rounded-b-4xl shadow-lg">
         <div className="max-w-6xl mx-auto px-6 py-12">
           <div className="flex justify-between items-end mb-6">
             <h2 className="text-2xl font-bold text-[#6A4423]">Your Last Order</h2>
-            <button className="text-sm font-semibold text-[#8A6B52] hover:text-[#5C3A21] underline decoration-1 transition-colors">
-              Add all to basket
-            </button>
+            {lastOrderItems.length > 0 && (
+              <button
+                onClick={() => lastOrderItems.forEach((item) => addToCart({ id: item.id, name: item.name, price: item.price, imageURL: item.imageURL, category: item.category, description: item.description }))}
+                className="text-sm font-semibold text-[#8A6B52] hover:text-[#5C3A21] underline decoration-1 transition-colors"
+              >
+                Add all to basket
+              </button>
+            )}
           </div>
-          
+          {lastOrderItems.length === 0 ? (
+            <p className="text-[#8A6B52] italic">No previous orders yet. Start ordering!</p>
+          ) : (
+            <div className="grid grid-flow-col auto-cols-[85%] md:auto-cols-[calc(33.333%-1rem)] gap-6 overflow-x-auto snap-x snap-mandatory pb-6 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#D4C8BA] [&::-webkit-scrollbar-thumb]:rounded-full">
+              {lastOrderItems.map((item, i) => (
+                <div key={i} className="snap-start h-full">
+                  <FoodCard item={item} onOpen={() => openPopup(item)} />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Limited Time Only */}
+      <section className="max-w-6xl mx-auto px-6 py-16">
+        <h2 className="text-2xl font-bold text-[#6A4423] mb-6 text-center tracking-wide uppercase">Limited Time Only</h2>
+        {limitedItems.length === 0 ? (
+          <p className="text-center text-[#8A6B52] italic">No limited items right now.</p>
+        ) : (
           <div className="grid grid-flow-col auto-cols-[85%] md:auto-cols-[calc(33.333%-1rem)] gap-6 overflow-x-auto snap-x snap-mandatory pb-6 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#D4C8BA] [&::-webkit-scrollbar-thumb]:rounded-full">
-            {[1, 2, 3, 4, 5].map((item) => (
-              <div key={`last-order-${item}`} className="snap-start h-full">
-                <FoodCard />
+            {limitedItems.map((item) => (
+              <div key={item.id} className="snap-start h-full">
+                <FoodCard item={item} onOpen={() => openPopup(item)} badge="Limited" />
               </div>
             ))}
           </div>
-        </div>
+        )}
       </section>
 
-      {/* 3. Limited Time Only Section */}
-      <section className="max-w-6xl mx-auto px-6 py-16">
-        <h2 className="text-2xl font-bold text-[#6A4423] mb-6 text-center tracking-wide uppercase">
-          Limited Time Only
-        </h2>
-        
-        <div className="grid grid-flow-col auto-cols-[85%] md:auto-cols-[calc(33.333%-1rem)] gap-6 overflow-x-auto snap-x snap-mandatory pb-6 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#D4C8BA] [&::-webkit-scrollbar-thumb]:rounded-full">
-          {[1, 2, 3, 4, 5].map((item) => (
-            <div key={`lto-${item}`} className="snap-start h-full">
-              <div className="bg-white rounded-2xl overflow-hidden shadow-sm border border-[#D4C8BA] flex flex-col hover:shadow-md transition-shadow cursor-pointer h-full">
-                <div className="h-56 bg-[#997855] flex items-center justify-center text-[#EAE3D9]/70 font-medium">
-                  image
-                </div>
-                <div className="p-5 flex-1 flex flex-col">
-                  <div className="flex justify-between items-start mb-2">
-                    <h3 className="font-bold text-lg text-[#5C3A21]">Special Item {item}</h3>
-                    <span className="font-bold text-[#8A6B52]">₱350.00</span>
-                  </div>
-                  <p className="text-sm text-[#8A6B52] mt-auto">Available until this weekend only!</p>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-            {/* 4. Most Ordered Section */}
+      {/* Most Ordered */}
       <section className="w-full bg-[#E7E2DE] rounded-t-4xl shadow-[0_-7px_6px_-1px_rgba(0,0,0,0.1)]">
         <div className="max-w-6xl mx-auto px-6 py-12">
-          
           <h2 className="text-2xl font-bold text-[#6A4423] mb-6">Most Ordered</h2>
-          
-          {/* Keeping this as a standard wrap grid since you didn't ask for scroll here, but you can copy the classes above if you want it here too! */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-4">
-            {[1, 2, 3].map((item) => (
-              <FoodCard key={`popular-${item}`} />
-            ))}
-          </div>
-
+          {mostOrderedItems.length === 0 ? (
+            <p className="text-[#8A6B52] italic">No order data yet.</p>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-4">
+              {mostOrderedItems.map((item) => (
+                <FoodCard key={item.id} item={item} onOpen={() => openPopup(item)} />
+              ))}
+            </div>
+          )}
         </div>
       </section>
 
-      {/* 5. Footer */}
+      {/* Footer */}
       <footer className="w-full bg-[#3a3028] text-[#DCD1C4] py-10 mt-auto">
         <div className="max-w-6xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-4">
           <div className="flex flex-col items-center md:items-start gap-1">
             <span className="text-2xl font-bold text-white">Brand</span>
-            <p className="text-sm opacity-80">
-              &copy; {new Date().getFullYear()} Brand Inc. All rights reserved.
-            </p>
+            <p className="text-sm opacity-80">&copy; {new Date().getFullYear()} Brand Inc. All rights reserved.</p>
           </div>
           <div className="flex gap-6 text-sm font-medium">
             <Link href="#" className="hover:text-white transition-colors">Privacy Policy</Link>
@@ -176,28 +282,29 @@ export default function HomePage() {
           </div>
         </div>
       </footer>
-
     </div>
   );
 }
 
-// Reusable UI Component for standard food items
-function FoodCard() {
+function FoodCard({ item, onOpen, badge }: { item: MenuItem; onOpen: () => void; badge?: string }) {
   return (
-    <div className="h-full bg-white rounded-2xl overflow-hidden shadow-sm border border-[#D4C8BA] flex flex-col hover:shadow-md transition-shadow cursor-pointer">
-      {/* Image Placeholder */}
-      <div className="h-48 bg-[#997855] flex items-center justify-center text-[#EAE3D9]/70 font-medium shrink-0">
-        image
+    <div onClick={onOpen} className="h-full bg-white rounded-2xl overflow-hidden shadow-sm border border-[#D4C8BA] flex flex-col hover:shadow-md transition-shadow cursor-pointer relative">
+      {badge && (
+        <span className="absolute top-3 left-3 z-10 bg-[#997855] text-white text-xs font-bold px-2 py-1 rounded-full">{badge}</span>
+      )}
+<div className="h-48 bg-[#EAE0D5] shrink-0 relative overflow-hidden">
+        {item.imageURL ? (
+          <Image src={item.imageURL} alt={item.name} fill sizes="(max-width: 768px) 85vw, (max-width: 1200px) 33vw, 320px" className="object-cover" />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-[#997855]/50 font-medium">image</div>
+        )}
       </div>
-      {/* Card Details */}
       <div className="p-4 flex-1 flex flex-col">
         <div className="flex justify-between items-start mb-1">
-          <h3 className="font-bold text-[#5C3A21]">Food Name</h3>
-          <span className="font-bold text-[#8A6B52]">₱120.00</span>
+          <h3 className="font-bold text-[#5C3A21]">{item.name}</h3>
+          <span className="font-bold text-[#8A6B52] shrink-0 ml-2">₱{item.price}</span>
         </div>
-        <p className="text-xs text-[#8A6B52] line-clamp-2 mt-auto">
-          short description of the food item goes right here.
-        </p>
+        <p className="text-xs text-[#8A6B52] line-clamp-2 mt-auto">{item.description}</p>
       </div>
     </div>
   );
