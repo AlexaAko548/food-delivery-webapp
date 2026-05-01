@@ -38,7 +38,7 @@ export default function CartSidebar() {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
   const markerRef = useRef<any>(null);
-  const searchDebounceRef = useRef<NodeJS.Timeout>();
+  const searchDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
   const serviceFee = totalAmount * SERVICE_FEE_RATE;
   const grandTotal = totalAmount + serviceFee;
