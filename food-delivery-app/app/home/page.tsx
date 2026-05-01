@@ -42,6 +42,9 @@ export default function HomePage() {
   const [mostOrderedItems, setMostOrderedItems] = useState<MenuItem[]>([]);
   const [popupItem, setPopupItem] = useState<PopupItem | null>(null);
   const [popupQty, setPopupQty] = useState(1);
+  const [allMenuItems, setAllMenuItems] = useState<MenuItem[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isSearching, setIsSearching] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -53,6 +56,7 @@ export default function HomePage() {
       try {
         const menuSnap = await getDocs(query(collection(db, "menu"), orderBy("name")));
         allMenu = menuSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as MenuItem[];
+        setAllMenuItems(allMenu);
       } catch (err) {
         console.error("Error fetching menu:", err);
       }
@@ -61,16 +65,32 @@ export default function HomePage() {
         const ordersQ = query(
           collection(db, "orders"),
           where("uid", "==", user.uid),
-          orderBy("createdAt", "desc"),
-          limit(1)
+          orderBy("createdAt", "desc")
+          // limit(1) has been removed to fetch all past orders
         );
         const ordersSnap = await getDocs(ordersQ);
+        
         if (!ordersSnap.empty) {
-          const lastOrder = ordersSnap.docs[0].data();
-          setLastOrderItems(lastOrder.items || []);
+          // Use a Map to deduplicate items by their ID
+          const uniqueItems = new Map<string, MenuItem>();
+          
+          ordersSnap.docs.forEach((doc) => {
+            const orderData = doc.data();
+            const items = orderData.items || [];
+            
+            items.forEach((item: MenuItem) => {
+              // Only add the item if we haven't already added it from a newer order
+              if (!uniqueItems.has(item.id)) {
+                uniqueItems.set(item.id, item);
+              }
+            });
+          });
+
+          // Convert the Map values back to an array and set state
+          setLastOrderItems(Array.from(uniqueItems.values()));
         }
       } catch (err: any) {
-        console.error("Error fetching last order (composite index missing?):", err?.message || err);
+        console.error("Error fetching past orders (composite index missing?):", err?.message || err);
       }
 
       try {
@@ -124,6 +144,27 @@ export default function HomePage() {
     setPopupItem(null);
   };
 
+  const handleSearch = () => {
+    if (searchQuery.trim()) {
+      setIsSearching(true);
+    }
+  };
+
+  const clearSearch = () => {
+    setSearchQuery("");
+    setIsSearching(false);
+  };
+
+  const getFilteredItems = () => {
+    const query = searchQuery.toLowerCase().trim();
+    return allMenuItems.filter(
+      (item) =>
+        item.name.toLowerCase().includes(query) ||
+        item.description.toLowerCase().includes(query) ||
+        item.category?.toLowerCase().includes(query)
+    );
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#F9FAFB] flex items-center justify-center">
@@ -146,7 +187,7 @@ export default function HomePage() {
           <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setPopupItem(null)} />
           <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden z-10">
             <div className="relative h-56 w-full bg-[#EAE0D5]">
-{popupItem.imageURL ? (
+              {popupItem.imageURL ? (
                 <Image src={popupItem.imageURL} alt={popupItem.name} fill sizes="(max-width: 768px) 100vw, 448px" className="object-cover" />
               ) : (
                 <div className="w-full h-full flex items-center justify-center text-6xl">🍽️</div>
@@ -193,9 +234,21 @@ export default function HomePage() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                 </svg>
               </div>
-              <input type="text" placeholder="Pasta? Bread? Something sweet?" className="w-full pl-12 pr-4 py-4 rounded-full bg-[#E7E2DE] text-[#5C3A21] placeholder:text-[#8A6B52] focus:outline-none focus:ring-4 focus:ring-[#6A4423]/50 transition-all font-medium" />
+              <input 
+                type="text" 
+                placeholder="Pasta? Bread? Something sweet?" 
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                className="w-full pl-12 pr-4 py-4 rounded-full bg-[#E7E2DE] text-[#5C3A21] placeholder:text-[#8A6B52] focus:outline-none focus:ring-4 focus:ring-[#6A4423]/50 transition-all font-medium" 
+              />
             </div>
-            <button className="px-8 py-4 bg-[#997855] hover:bg-[#745b40] text-white rounded-full font-bold shadow-lg transition-colors">Search</button>
+            <button 
+              onClick={handleSearch}
+              className="px-8 py-4 bg-[#997855] hover:bg-[#745b40] text-white rounded-full font-bold shadow-lg transition-colors"
+            >
+              Search
+            </button>
           </div>
           <div className="flex flex-wrap justify-center gap-6 md:gap-10">
             {CATEGORIES.map((cat, index) => (
@@ -209,6 +262,7 @@ export default function HomePage() {
       </section>
 
       {/* Your Last Order */}
+      {!isSearching && (
       <section className="w-full bg-[#E7E2DE] rounded-b-4xl shadow-lg">
         <div className="max-w-6xl mx-auto px-6 py-12">
           <div className="flex justify-between items-end mb-6">
@@ -235,8 +289,10 @@ export default function HomePage() {
           )}
         </div>
       </section>
+      )}
 
       {/* Limited Time Only */}
+      {!isSearching && (
       <section className="max-w-6xl mx-auto px-6 py-16">
         <h2 className="text-2xl font-bold text-[#6A4423] mb-6 text-center tracking-wide uppercase">Limited Time Only</h2>
         {limitedItems.length === 0 ? (
@@ -251,8 +307,10 @@ export default function HomePage() {
           </div>
         )}
       </section>
+      )}
 
       {/* Most Ordered */}
+      {!isSearching && (
       <section className="w-full bg-[#E7E2DE] rounded-t-4xl shadow-[0_-7px_6px_-1px_rgba(0,0,0,0.1)]">
         <div className="max-w-6xl mx-auto px-6 py-12">
           <h2 className="text-2xl font-bold text-[#6A4423] mb-6">Most Ordered</h2>
@@ -267,13 +325,50 @@ export default function HomePage() {
           )}
         </div>
       </section>
+      )}
+
+      {/* Search Results */}
+      {isSearching && (
+      <section className="w-full bg-gradient-to-b from-[#E7E2DE] to-[#F9FAFB]">
+        <div className="max-w-6xl mx-auto px-6 py-12">
+          <div className="flex items-center justify-between mb-8">
+            <div>
+              <h2 className="text-3xl font-bold text-[#6A4423] mb-1">Search Results</h2>
+              <p className="text-[#8A6B52]">Found {getFilteredItems().length} item{getFilteredItems().length !== 1 ? 's' : ''} for "{searchQuery}"</p>
+            </div>
+            <button 
+              onClick={clearSearch}
+              className="px-6 py-2 bg-[#997855] hover:bg-[#745b40] text-white rounded-full font-semibold transition-colors"
+            >
+              Clear Search
+            </button>
+          </div>
+
+          {getFilteredItems().length === 0 ? (
+            <div className="text-center py-12">
+              <div className="text-5xl mb-4">🔍</div>
+              <p className="text-xl font-medium text-[#5C3A21] mb-2">No items found</p>
+              <p className="text-[#8A6B52]">Try searching with different keywords</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {getFilteredItems().map((item) => (
+                <FoodCard key={item.id} item={item} onOpen={() => openPopup(item)} />
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+      )}
 
       {/* Footer */}
       <footer className="w-full bg-[#3a3028] text-[#DCD1C4] py-10 mt-auto">
         <div className="max-w-6xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-4">
           <div className="flex flex-col items-center md:items-start gap-1">
-            <span className="text-2xl font-bold text-white">Brand</span>
-            <p className="text-sm opacity-80">&copy; {new Date().getFullYear()} Brand Inc. All rights reserved.</p>
+            <span className="text-2xl font-bold text-white">UsCafe</span>
+            <p className="text-sm opacity-80">
+              &copy; {new Date().getFullYear()} UsCafe Inc. All rights reserved.
+            </p>
           </div>
           <div className="flex gap-6 text-sm font-medium">
             <Link href="#" className="hover:text-white transition-colors">Privacy Policy</Link>
@@ -292,7 +387,7 @@ function FoodCard({ item, onOpen, badge }: { item: MenuItem; onOpen: () => void;
       {badge && (
         <span className="absolute top-3 left-3 z-10 bg-[#997855] text-white text-xs font-bold px-2 py-1 rounded-full">{badge}</span>
       )}
-<div className="h-48 bg-[#EAE0D5] shrink-0 relative overflow-hidden">
+      <div className="h-48 bg-[#EAE0D5] shrink-0 relative overflow-hidden">
         {item.imageURL ? (
           <Image src={item.imageURL} alt={item.name} fill sizes="(max-width: 768px) 85vw, (max-width: 1200px) 33vw, 320px" className="object-cover" />
         ) : (
