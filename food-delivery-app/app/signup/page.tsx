@@ -16,7 +16,11 @@ export default function SignupPage() {
   const router = useRouter();
 
   const [currentSlide, setCurrentSlide] = useState(0);
-  const slides = ["Placeholder Image 1", "Placeholder Image 2", "Placeholder Image 3"];
+  const slides = [
+    "https://static.cordonbleu.edu/Files/MediaFile/88425.jpg",
+    "https://m.media-amazon.com/images/S/assets.wholefoodsmarket.com//content/57/85/7a61e4d94a80ace0a3a0a50b03d4/2025-wfm-cen-novb-ee-thanksgiving-family-meals-wfmonsite-homepage-content-split._TTW_._CR0,0,1320,990_._SR900,675_._QL100_.jpg",
+    "https://wowitsveggie.com/wp-content/uploads/2020/04/differenttypesofcofee-coffeedrinks.jpg"
+  ];
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -88,7 +92,7 @@ export default function SignupPage() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16"></path>
           </svg>
         </button>
-        <Link href="/" className="hover:opacity-70 transition-opacity text-2xl font-bold text-[#5C3A21]">Brand</Link>
+        <Link href="/" className="hover:opacity-70 transition-opacity text-2xl font-bold text-[#5C3A21]">UsCafe</Link>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
@@ -171,10 +175,8 @@ export default function SignupPage() {
         </div>
 
         <div className="hidden md:flex w-1/2 relative bg-[#4A3F35] items-center justify-center overflow-hidden">
-          <div className="absolute inset-0 transition-opacity duration-1000 flex items-center justify-center bg-[#3a3028]">
-            <span className="text-[#EAE3D9] font-bold text-2xl border-2 border-[#EAE3D9] p-6 rounded-xl bg-black/20">
-              {slides[currentSlide]}
-            </span>
+          <div className="absolute inset-0 transition-opacity mix-blend-overlay duration-1000 flex items-center justify-center bg-[#7e6855]">
+            <img src={slides[currentSlide]} alt="Food slideshow" className="w-full h-full object-cover" />
           </div>
         </div>
 

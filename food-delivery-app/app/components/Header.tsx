@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged, signOut } from "firebase/auth";
@@ -12,6 +12,7 @@ export default function Header({ onToggleSidebar }: { onToggleSidebar?: () => vo
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
   const [notifications, setNotifications] = useState<any[]>([]);
+  const profileRef = useRef<HTMLDivElement>(null);
 
   const { totalItems, setCartOpen } = useCart();
 
@@ -21,6 +22,19 @@ export default function Header({ onToggleSidebar }: { onToggleSidebar?: () => vo
     });
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (profileRef.current && !profileRef.current.contains(event.target as Node)) {
+        setIsProfileOpen(false);
+      }
+    };
+
+    if (isProfileOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [isProfileOpen]);
 
   const handleLogout = async () => {
     await signOut(auth);
@@ -32,7 +46,9 @@ export default function Header({ onToggleSidebar }: { onToggleSidebar?: () => vo
 
       {/* LEFT SIDE */}
       <div className="flex items-center gap-4">
-        <span className="text-white font-black text-xl tracking-[1.2px]">Brand</span>
+        <Link href="/" className="text-white font-black text-xl tracking-[1.2px]">
+          UsCafe
+        </Link>
       </div>
 
       {/* RIGHT SIDE */}
@@ -99,7 +115,7 @@ export default function Header({ onToggleSidebar }: { onToggleSidebar?: () => vo
         </button>
 
         {/* Profile */}
-        <div className="relative">
+        <div className="relative" ref={profileRef}>
           <div
             className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
             onClick={() => {
