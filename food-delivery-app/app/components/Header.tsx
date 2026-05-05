@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth } from "../../firebase/clientApp";
 import { useCart } from "../../context/CartContext";
+import { doc, getDoc } from "firebase/firestore";
+import { db } from "../../firebase/clientApp";
 
 export default function Header({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   const router = useRouter();
@@ -17,8 +19,23 @@ export default function Header({ onToggleSidebar }: { onToggleSidebar?: () => vo
   const { totalItems, setCartOpen } = useCart();
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) setUserName(user.displayName || "User");
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        if (user.displayName) {
+          // Google users already have displayName
+          setUserName(user.displayName);
+        } else {
+          // Email/password users — read from Firestore
+          try {
+            const docSnap = await getDoc(doc(db, "users", user.uid));
+            if (docSnap.exists()) {
+              setUserName(docSnap.data().username || "User");
+            }
+          } catch (err) {
+            setUserName("User");
+          }
+        }
+      }
     });
     return () => unsubscribe();
   }, []);
