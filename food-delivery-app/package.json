@@ -10,6 +10,12 @@
   },
   "dependencies": {
     "firebase": "^12.12.0",
+<<<<<<< Updated upstream
+=======
+    "firebase-admin": "^13.8.0",
+    "leaflet": "^1.9.4",
+    "lucide-react": "^1.14.0",
+>>>>>>> Stashed changes
     "next": "^16.2.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",
