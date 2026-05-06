@@ -1,5 +1,5 @@
 "use client";
-import { createContext, useContext, useState, ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, ReactNode } from "react";
 
 export interface CartItem {
   id: string;
@@ -24,9 +24,29 @@ interface CartContextType {
 
 const CartContext = createContext<CartContextType | null>(null);
 
+const CART_KEY = "uscafe_cart";
+
 export function CartProvider({ children }: { children: ReactNode }) {
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [cartOpen, setCartOpen] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+
+  // Load from localStorage on mount
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(CART_KEY);
+      if (stored) setCartItems(JSON.parse(stored));
+    } catch {}
+    setHydrated(true);
+  }, []);
+
+  // Save to localStorage whenever cart changes (after hydration)
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      localStorage.setItem(CART_KEY, JSON.stringify(cartItems));
+    } catch {}
+  }, [cartItems, hydrated]);
 
   const addToCart = (item: Omit<CartItem, "quantity">) => {
     setCartItems((prev) => {
@@ -48,7 +68,10 @@ export function CartProvider({ children }: { children: ReactNode }) {
     );
   };
 
-  const clearCart = () => setCartItems([]);
+  const clearCart = () => {
+    setCartItems([]);
+    try { localStorage.removeItem(CART_KEY); } catch {}
+  };
 
   const totalItems = cartItems.reduce((sum, c) => sum + c.quantity, 0);
   const totalAmount = cartItems.reduce((sum, c) => sum + c.price * c.quantity, 0);

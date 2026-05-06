@@ -5,7 +5,7 @@ import { useCart } from "../../context/CartContext";
 import { auth, db } from "../../firebase/clientApp";
 import {
   collection, addDoc, serverTimestamp,
-  query, where, getDocs,
+  query, where, getDocs, doc, setDoc,
 } from "firebase/firestore";
 
 interface Address {
@@ -32,8 +32,14 @@ export default function CartSidebar() {
   const [mapLat, setMapLat] = useState(10.3157);
   const [mapLng, setMapLng] = useState(123.8854);
   const [showCheckout, setShowCheckout] = useState(false);
-  const [selectedPayment, setSelectedPayment] = useState<PaymentMethod>(null);
+  const [selectedPayment, setSelectedPayment] = useState<PaymentMethod>(() => {
+    if (typeof window !== "undefined") {
+      return (localStorage.getItem("selectedPayment") as PaymentMethod) || null;
+    }
+    return null;
+  });
   const [orderStatus, setOrderStatus] = useState<OrderStatus>("idle");
+  const [orderRefId, setOrderRefId] = useState<string | null>(null);
   const [geocodingError, setGeocodingError] = useState("");
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
@@ -43,6 +49,30 @@ export default function CartSidebar() {
   const serviceFee = totalAmount * SERVICE_FEE_RATE;
   const grandTotal = totalAmount + serviceFee;
   const hasSetup = userAddress !== null && selectedPayment !== null;
+
+  const handleSetPayment = (method: PaymentMethod) => {
+    setSelectedPayment(method);
+    if (method) localStorage.setItem("selectedPayment", method);
+    else localStorage.removeItem("selectedPayment");
+  };
+  const saveAddressToFirestore = async (addr: Address) => {
+    const user = auth.currentUser;
+    if (!user) return;
+    try {
+      const snap = await getDocs(
+        query(collection(db, "addresses"), where("uid", "==", user.uid))
+      );
+      if (!snap.empty) {
+        // Overwrite existing document
+        await setDoc(snap.docs[0].ref, { ...addr, uid: user.uid });
+      } else {
+        // Create new document
+        await addDoc(collection(db, "addresses"), { ...addr, uid: user.uid });
+      }
+    } catch (err) {
+      console.error("Failed to save address:", err);
+    }
+  };
 
   // Reverse geocode coordinates to address using Nominatim
   const reverseGeocode = async (lat: number, lng: number) => {
@@ -75,7 +105,7 @@ export default function CartSidebar() {
   const handleAddressInputChange = (value: string) => {
     setAddressInput(value);
     setGeocodingError("");
-    
+
     if (searchDebounceRef.current) {
       clearTimeout(searchDebounceRef.current);
     }
@@ -109,12 +139,15 @@ export default function CartSidebar() {
   const handleSelectSearchResult = async (result: any) => {
     const lat = parseFloat(result.lat);
     const lng = parseFloat(result.lon);
-    
+
     setMapLat(lat);
     setMapLng(lng);
-    
+
     const addr = await reverseGeocode(lat, lng);
     setUserAddress(addr);
+    // Persist so it loads on next visit
+    await saveAddressToFirestore(addr);
+
     setAddressInput("");
     setSearchResults([]);
     setShowSearchResults(false);
@@ -124,10 +157,10 @@ export default function CartSidebar() {
   const handleAddressSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!addressInput.trim() || searchResults.length === 0) return;
-    
     await handleSelectSearchResult(searchResults[0]);
   };
 
+  // Load saved address from Firestore when cart opens
   useEffect(() => {
     if (!cartOpen) return;
     const user = auth.currentUser;
@@ -137,9 +170,22 @@ export default function CartSidebar() {
       .then((snap) => {
         if (!snap.empty) {
           const d = snap.docs[0].data();
-          setUserAddress({ street: d.street, city: d.city, zip: d.zip });
+          const addr: Address = {
+            street: d.street,
+            city: d.city,
+            zip: d.zip,
+            latitude: d.latitude,
+            longitude: d.longitude,
+          };
+          setUserAddress(addr);
+          // Pan map to saved address if coordinates exist
+          if (d.latitude && d.longitude) {
+            setMapLat(d.latitude);
+            setMapLng(d.longitude);
+          }
         }
       })
+      .catch((err) => console.error("Failed to load address:", err))
       .finally(() => setAddressLoading(false));
   }, [cartOpen]);
 
@@ -160,16 +206,16 @@ export default function CartSidebar() {
             iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
             shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
           });
-          
+
           const map = L.map(mapRef.current!).setView([mapLat, mapLng], 14);
           L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
             attribution: "© OpenStreetMap contributors",
           }).addTo(map);
-          
+
           const marker = L.marker([mapLat, mapLng], { draggable: true }).addTo(map);
           marker.bindPopup("Your delivery location").openPopup();
           markerRef.current = marker;
-          
+
           // Handle marker drag to update location
           marker.on("dragend", async () => {
             const newLat = marker.getLatLng().lat;
@@ -178,24 +224,26 @@ export default function CartSidebar() {
             setMapLng(newLng);
             const addr = await reverseGeocode(newLat, newLng);
             setUserAddress(addr);
+            await saveAddressToFirestore(addr);
             marker.setPopupContent(`${addr.street}, ${addr.city}`);
           });
-          
+
           // Handle map click to place marker
           map.on("click", async (e: any) => {
             const newLat = e.latlng.lat;
             const newLng = e.latlng.lng;
-            
+
             marker.setLatLng([newLat, newLng]);
             setMapLat(newLat);
             setMapLng(newLng);
-            
+
             const addr = await reverseGeocode(newLat, newLng);
             setUserAddress(addr);
+            await saveAddressToFirestore(addr);
             marker.setPopupContent(`${addr.street}, ${addr.city}`);
             marker.openPopup();
           });
-          
+
           mapInstanceRef.current = map;
         });
       }
@@ -206,10 +254,7 @@ export default function CartSidebar() {
   // Update map when lat/lng changes
   useEffect(() => {
     if (!mapInstanceRef.current || !markerRef.current || !showCheckout) return;
-    
-    // Pan and zoom to new location
     mapInstanceRef.current.setView([mapLat, mapLng], 14);
-    // Update marker position
     markerRef.current.setLatLng([mapLat, mapLng]);
   }, [mapLat, mapLng, showCheckout]);
 
@@ -217,7 +262,6 @@ export default function CartSidebar() {
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      // Close if clicking outside the search input area
       if (!target.closest('input') && !target.closest('[role="button"]')) {
         setShowSearchResults(false);
       }
@@ -234,7 +278,7 @@ export default function CartSidebar() {
     if (!user) return;
     setOrderStatus("loading");
     try {
-      await addDoc(collection(db, "orders"), {
+      const docRef = await addDoc(collection(db, "orders"), {
         uid: user.uid,
         items: cartItems,
         subtotal: totalAmount,
@@ -245,10 +289,9 @@ export default function CartSidebar() {
         status: "pending",
         createdAt: serverTimestamp(),
       });
+      setOrderRefId(docRef.id);
       setOrderStatus("success");
       clearCart();
-      setSelectedPayment(null);
-      setUserAddress(null);
       setAddressInput("");
       setSearchResults([]);
       setShowSearchResults(false);
@@ -275,7 +318,7 @@ export default function CartSidebar() {
         />
 
         {/* Drawer */}
-        <div className="w-full max-w-xl bg-[#F5EFE9] h-full shadow-2xl flex flex-col">
+        <div className="w-full max-w-xl bg-[#F5EFE9] h-full shadow-2xl flex flex-col relative">
 
           {/* Header */}
           <div className="flex items-center justify-between px-6 py-4 border-b border-[#DDD0C4]">
@@ -294,6 +337,63 @@ export default function CartSidebar() {
               className="text-gray-400 hover:text-gray-600 text-2xl leading-none cursor-pointer"
             >&times;</button>
           </div>
+
+          {/* ── GLOBAL MODALS — render over any view ── */}
+          {orderStatus === "success" && (
+            <div className="absolute inset-0 bg-[#F5EFE9]/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-6">
+              <div className="bg-white rounded-2xl shadow-xl p-8 text-center max-w-xs w-full">
+                <div className="text-5xl mb-3">✅</div>
+                <h3 className="text-xl font-bold text-[#3a2010] mb-2">Payment Successful</h3>
+                <p className="text-sm text-gray-500 mb-4">Thank you for ordering<br />Your food is now being prepared :)</p>
+                {orderRefId && (
+                  <div className="mb-5 px-3 py-2 bg-[#F5EFE9] border border-[#C9B9A8] rounded-xl">
+                    <p className="text-xs text-[#8A6B52] mb-1">Reference Number</p>
+                    <p className="text-xs font-mono font-bold text-[#3a2010] break-all">{orderRefId}</p>
+                  </div>
+                )}
+                <button
+                  onClick={() => {
+                    setCartOpen(false);
+                    setShowCheckout(false);
+                    setOrderStatus("idle");
+                    setOrderRefId(null);
+                    setAddressInput("");
+                    setSearchResults([]);
+                    setShowSearchResults(false);
+                  }}
+                  className="w-full py-2 bg-[#7a5c40] hover:bg-[#5c4033] text-white rounded-full font-bold transition cursor-pointer"
+                >Return to Home</button>
+              </div>
+            </div>
+          )}
+
+          {orderStatus === "failed" && (
+            <div className="absolute inset-0 bg-[#F5EFE9]/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-6">
+              <div className="bg-white rounded-2xl shadow-xl p-8 text-center max-w-xs w-full">
+                <div className="text-5xl mb-3">❌</div>
+                <h3 className="text-xl font-bold text-[#3a2010] mb-2">Payment Failed</h3>
+                <p className="text-sm text-gray-500 mb-6">Your payment didn't go through :(<br />No charges were made. Try again?</p>
+                <button
+                  onClick={() => setOrderStatus("idle")}
+                  className="w-full py-2 bg-[#7a5c40] hover:bg-[#5c4033] text-white rounded-full font-bold transition cursor-pointer"
+                >Close</button>
+              </div>
+            </div>
+          )}
+
+          {orderStatus === "network_error" && (
+            <div className="absolute inset-0 bg-[#F5EFE9]/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-6">
+              <div className="bg-white rounded-2xl shadow-xl p-8 text-center max-w-xs w-full">
+                <div className="text-5xl mb-3">🌐</div>
+                <h3 className="text-xl font-bold text-[#3a2010] mb-2">Network Error</h3>
+                <p className="text-sm text-gray-500 mb-6">We couldn't connect<br />Please try again in a moment :X</p>
+                <button
+                  onClick={() => setOrderStatus("idle")}
+                  className="w-full py-2 bg-[#7a5c40] hover:bg-[#5c4033] text-white rounded-full font-bold transition cursor-pointer"
+                >Close</button>
+              </div>
+            </div>
+          )}
 
           {/* ── CART VIEW ── */}
           {!showCheckout && (
@@ -391,7 +491,14 @@ export default function CartSidebar() {
                     <span className="font-bold text-[#3a2010] text-xl">₱{grandTotal.toFixed(2)}</span>
                   </div>
                   <button
-                    onClick={() => { setShowCheckout(true); setOrderStatus("idle"); }}
+                    onClick={() => {
+                      if (hasSetup) {
+                        handleConfirmOrder();
+                      } else {
+                        setShowCheckout(true);
+                        setOrderStatus("idle");
+                      }
+                    }}
                     className="w-full py-3 bg-[#7a5c40] hover:bg-[#5c4033] text-white rounded-full font-bold text-base transition cursor-pointer"
                   >
                     {hasSetup ? "Confirm Order" : "Review Payment and Address"}
@@ -408,195 +515,144 @@ export default function CartSidebar() {
           {showCheckout && (
             <div className="flex-1 flex flex-col relative overflow-hidden">
 
-              {/* Success modal */}
-              {orderStatus === "success" && (
-                <div className="absolute inset-0 bg-[#F5EFE9]/80 backdrop-blur-sm z-9999 flex items-center justify-center p-6">
-                  <div className="bg-white rounded-2xl shadow-xl p-8 text-center max-w-xs w-full">
-                    <div className="text-5xl mb-3">✅</div>
-                    <h3 className="text-xl font-bold text-[#3a2010] mb-2">Payment Successful</h3>
-                    <p className="text-sm text-gray-500 mb-6">Thank you for ordering<br />Your food is now being prepared :)</p>
-                    <button
-                      onClick={() => { 
-                        setCartOpen(false); 
-                        setShowCheckout(false); 
-                        setOrderStatus("idle");
-                        setSelectedPayment(null);
-                        setUserAddress(null);
-                        setAddressInput("");
-                        setSearchResults([]);
-                        setShowSearchResults(false);
-                      }}
-                      className="w-full py-2 bg-[#7a5c40] hover:bg-[#5c4033] text-white rounded-full font-bold transition cursor-pointer"
-                    >Return to Home</button>
-                  </div>
-                </div>
-              )}
-
-              {/* Failed modal */}
-              {orderStatus === "failed" && (
-                <div className="absolute inset-0 bg-[#F5EFE9]/80 backdrop-blur-sm z-10 flex items-center justify-center p-6">
-                  <div className="bg-white rounded-2xl shadow-xl p-8 text-center max-w-xs w-full">
-                    <div className="text-5xl mb-3">❌</div>
-                    <h3 className="text-xl font-bold text-[#3a2010] mb-2">Payment Failed</h3>
-                    <p className="text-sm text-gray-500 mb-6">Your payment didn't go through :(<br />No charges were made. Try again?</p>
-                    <button
-                      onClick={() => setOrderStatus("idle")}
-                      className="w-full py-2 bg-[#7a5c40] hover:bg-[#5c4033] text-white rounded-full font-bold transition cursor-pointer"
-                    >Close</button>
-                  </div>
-                </div>
-              )}
-
-              {/* Network error modal */}
-              {orderStatus === "network_error" && (
-                <div className="absolute inset-0 bg-[#F5EFE9]/80 backdrop-blur-sm z-10 flex items-center justify-center p-6">
-                  <div className="bg-white rounded-2xl shadow-xl p-8 text-center max-w-xs w-full">
-                    <div className="text-5xl mb-3">🌐</div>
-                    <h3 className="text-xl font-bold text-[#3a2010] mb-2">Network Error</h3>
-                    <p className="text-sm text-gray-500 mb-6">We couldn't connect<br />Please try again in a moment :X</p>
-                    <button
-                      onClick={() => setOrderStatus("idle")}
-                      className="w-full py-2 bg-[#7a5c40] hover:bg-[#5c4033] text-white rounded-full font-bold transition cursor-pointer"
-                    >Close</button>
-                  </div>
-                </div>
-              )}
-
               <div className="flex-1 overflow-y-auto flex flex-col">
                 <div className="px-6 py-5 flex-1 flex flex-col gap-6">
 
-                {/* Delivery Address */}
-                <div>
-                  <h3 className="font-bold text-[#3a2010] text-base mb-3">Where should we deliver?</h3>
-                  
-                  {/* Address Input */}
-                  <form onSubmit={handleAddressSearch} className="mb-4 relative">
-                    <div className="flex gap-2">
-                      <div className="flex-1 relative">
-                        <input
-                          type="text"
-                          placeholder="Search for your address..."
-                          value={addressInput}
-                          onChange={(e) => handleAddressInputChange(e.target.value)}
-                          onFocus={() => addressInput.trim() && setShowSearchResults(true)}
-                          className="w-full px-3 py-2 rounded-lg border border-[#C9B9A8] bg-white text-[#5c4033] placeholder:text-[#8A6B52] focus:outline-none focus:ring-2 focus:ring-[#7a5c40]"
-                        />
-                        
-                        {/* Search Results Dropdown */}
-                        {showSearchResults && searchResults.length > 0 && (
-                          <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-[#C9B9A8] rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto">
-                            {searchResults.map((result, idx) => (
-                              <button
-                                key={idx}
-                                type="button"
-                                onClick={() => handleSelectSearchResult(result)}
-                                className="w-full text-left px-4 py-2 hover:bg-[#F0E8E0] transition border-b border-[#EAE3D9] last:border-b-0"
-                              >
-                                <p className="font-semibold text-sm text-[#3a2010]">{result.name || result.display_name?.split(',')[0]}</p>
-                                <p className="text-xs text-[#8A6B52] truncate">{result.display_name?.split(',').slice(1).join(',')}</p>
-                              </button>
-                            ))}
-                          </div>
+                  {/* Delivery Address */}
+                  <div>
+                    <h3 className="font-bold text-[#3a2010] text-base mb-3">Where should we deliver?</h3>
+
+                    {/* Address Input */}
+                    <form onSubmit={handleAddressSearch} className="mb-4 relative">
+                      <div className="flex gap-2">
+                        <div className="flex-1 relative">
+                          <input
+                            type="text"
+                            placeholder="Search for your address..."
+                            value={addressInput}
+                            onChange={(e) => handleAddressInputChange(e.target.value)}
+                            onFocus={() => addressInput.trim() && setShowSearchResults(true)}
+                            className="w-full px-3 py-2 rounded-lg border border-[#C9B9A8] bg-white text-[#5c4033] placeholder:text-[#8A6B52] focus:outline-none focus:ring-2 focus:ring-[#7a5c40]"
+                          />
+
+                          {/* Search Results Dropdown */}
+                          {showSearchResults && searchResults.length > 0 && (
+                            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-[#C9B9A8] rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto">
+                              {searchResults.map((result, idx) => (
+                                <button
+                                  key={idx}
+                                  type="button"
+                                  onClick={() => handleSelectSearchResult(result)}
+                                  className="w-full text-left px-4 py-2 hover:bg-[#F0E8E0] transition border-b border-[#EAE3D9] last:border-b-0"
+                                >
+                                  <p className="font-semibold text-sm text-[#3a2010]">{result.name || result.display_name?.split(',')[0]}</p>
+                                  <p className="text-xs text-[#8A6B52] truncate">{result.display_name?.split(',').slice(1).join(',')}</p>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectSearchResult(searchResults[0])}
+                          disabled={addressLoading || searchResults.length === 0}
+                          className="px-4 py-2 bg-[#7a5c40] hover:bg-[#5c4033] text-white rounded-lg font-semibold text-sm transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {addressLoading ? "..." : "Go"}
+                        </button>
+                      </div>
+                      {geocodingError && (
+                        <p className="text-red-500 text-xs mt-2">{geocodingError}</p>
+                      )}
+                    </form>
+
+                    {/* Current Address */}
+                    {userAddress ? (
+                      <div className="p-3 rounded-lg bg-[#E8E0D5] border border-[#C9B9A8] mb-3">
+                        <p className="text-sm font-semibold text-[#5c4033] mb-1">Selected Location:</p>
+                        <p className="text-sm text-[#5c4033]">
+                          {userAddress.street}, {userAddress.city} {userAddress.zip}
+                        </p>
+                        {userAddress.latitude && userAddress.longitude && (
+                          <p className="text-xs text-[#8A6B52] mt-1">
+                            Coordinates: {userAddress.latitude.toFixed(4)}, {userAddress.longitude.toFixed(4)}
+                          </p>
                         )}
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => handleSelectSearchResult(searchResults[0])}
-                        disabled={addressLoading || searchResults.length === 0}
-                        className="px-4 py-2 bg-[#7a5c40] hover:bg-[#5c4033] text-white rounded-lg font-semibold text-sm transition disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {addressLoading ? "..." : "Go"}
+                    ) : (
+                      <p className="text-sm text-red-500 mb-3 font-medium">No location selected. Click on the map or search for your address.</p>
+                    )}
+
+                    {/* Leaflet Map */}
+                    <div
+                      ref={mapRef}
+                      className="w-full rounded-2xl overflow-hidden border border-[#C9B9A8] cursor-pointer z-0 relative"
+                      style={{ height: "250px" }}
+                      title="Click on the map to select your location"
+                    />
+                    <p className="mt-2 text-xs text-[#8A6B52]">💡 Click on the map to select location or drag the marker</p>
+                  </div>
+
+                  {/* Payment Method */}
+                  <div>
+                    <h3 className="font-bold text-[#3a2010] text-base mb-3">Payment Method</h3>
+                    <div className="flex flex-col gap-2">
+
+                      <label className="flex items-center gap-3 p-3 rounded-xl border border-[#C9B9A8] bg-white cursor-pointer hover:border-[#7a5c40] transition">
+                        <input type="radio" name="payment" value="mastercard" checked={selectedPayment === "mastercard"} onChange={() => handleSetPayment("mastercard")} className="accent-[#7a5c40] cursor-pointer" />
+                        <span className="text-lg">💳</span>
+                        <div>
+                          <p className="font-semibold text-[#3a2010] text-sm">Mastercard</p>
+                          <p className="text-xs text-[#8A6B52]">37•••••••••465</p>
+                        </div>
+                      </label>
+
+                      <label className="flex items-center gap-3 p-3 rounded-xl border border-[#C9B9A8] bg-white cursor-pointer hover:border-[#7a5c40] transition">
+                        <input type="radio" name="payment" value="gcash" checked={selectedPayment === "gcash"} onChange={() => handleSetPayment("gcash")} className="accent-[#7a5c40] cursor-pointer" />
+                        <span className="text-lg">📱</span>
+                        <div>
+                          <p className="font-semibold text-[#3a2010] text-sm">GCash</p>
+                          <p className="text-xs text-[#8A6B52]">Link your GCash number</p>
+                        </div>
+                      </label>
+
+                      <label className="flex items-center gap-3 p-3 rounded-xl border border-[#C9B9A8] bg-white cursor-pointer hover:border-[#7a5c40] transition">
+                        <input type="radio" name="payment" value="cash" checked={selectedPayment === "cash"} onChange={() => handleSetPayment("cash")} className="accent-[#7a5c40] cursor-pointer" />
+                        <span className="text-lg">💵</span>
+                        <div>
+                          <p className="font-semibold text-[#3a2010] text-sm">Cash on Delivery</p>
+                          <p className="text-xs text-[#8A6B52]">Pay when your order arrives</p>
+                        </div>
+                      </label>
+
+                      <button className="flex items-center gap-3 p-3 rounded-xl border border-dashed border-[#C9B9A8] bg-transparent hover:border-[#7a5c40] transition cursor-pointer w-full text-left">
+                        <span className="w-5 h-5 rounded-full border-2 border-[#7a5c40] flex items-center justify-center text-[#7a5c40] text-sm font-bold shrink-0">+</span>
+                        <p className="text-sm text-[#5c4033] font-medium">Add a different payment method</p>
                       </button>
                     </div>
-                    {geocodingError && (
-                      <p className="text-red-500 text-xs mt-2">{geocodingError}</p>
-                    )}
-                  </form>
-
-                  {/* Current Address */}
-                  {userAddress ? (
-                    <div className="p-3 rounded-lg bg-[#E8E0D5] border border-[#C9B9A8] mb-3">
-                      <p className="text-sm font-semibold text-[#5c4033] mb-1">Selected Location:</p>
-                      <p className="text-sm text-[#5c4033]">
-                        {userAddress.street}, {userAddress.city} {userAddress.zip}
-                      </p>
-                      {userAddress.latitude && userAddress.longitude && (
-                        <p className="text-xs text-[#8A6B52] mt-1">
-                          Coordinates: {userAddress.latitude.toFixed(4)}, {userAddress.longitude.toFixed(4)}
-                        </p>
-                      )}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-red-500 mb-3 font-medium">No location selected. Click on the map or search for your address.</p>
-                  )}
-
-                  {/* Leaflet Map */}
-                  <div
-                    ref={mapRef}
-                    className="w-full rounded-2xl overflow-hidden border border-[#C9B9A8] cursor-pointer z-0 relative"
-                    style={{ height: "250px" }}
-                    title="Click on the map to select your location"
-                  />
-                  <p className="mt-2 text-xs text-[#8A6B52]">💡 Click on the map to select location or drag the marker</p>
-                </div>
-
-                {/* Payment Method */}
-                <div>
-                  <h3 className="font-bold text-[#3a2010] text-base mb-3">Payment Method</h3>
-                  <div className="flex flex-col gap-2">
-
-                    <label className="flex items-center gap-3 p-3 rounded-xl border border-[#C9B9A8] bg-white cursor-pointer hover:border-[#7a5c40] transition">
-                      <input type="radio" name="payment" value="mastercard" checked={selectedPayment === "mastercard"} onChange={() => setSelectedPayment("mastercard")} className="accent-[#7a5c40] cursor-pointer" />
-                      <span className="text-lg">💳</span>
-                      <div>
-                        <p className="font-semibold text-[#3a2010] text-sm">Mastercard</p>
-                        <p className="text-xs text-[#8A6B52]">37•••••••••465</p>
-                      </div>
-                    </label>
-
-                    <label className="flex items-center gap-3 p-3 rounded-xl border border-[#C9B9A8] bg-white cursor-pointer hover:border-[#7a5c40] transition">
-                      <input type="radio" name="payment" value="gcash" checked={selectedPayment === "gcash"} onChange={() => setSelectedPayment("gcash")} className="accent-[#7a5c40] cursor-pointer" />
-                      <span className="text-lg">📱</span>
-                      <div>
-                        <p className="font-semibold text-[#3a2010] text-sm">GCash</p>
-                        <p className="text-xs text-[#8A6B52]">Link your GCash number</p>
-                      </div>
-                    </label>
-
-                    <label className="flex items-center gap-3 p-3 rounded-xl border border-[#C9B9A8] bg-white cursor-pointer hover:border-[#7a5c40] transition">
-                      <input type="radio" name="payment" value="cash" checked={selectedPayment === "cash"} onChange={() => setSelectedPayment("cash")} className="accent-[#7a5c40] cursor-pointer" />
-                      <span className="text-lg">💵</span>
-                      <div>
-                        <p className="font-semibold text-[#3a2010] text-sm">Cash on Delivery</p>
-                        <p className="text-xs text-[#8A6B52]">Pay when your order arrives</p>
-                      </div>
-                    </label>
-
-                    <button className="flex items-center gap-3 p-3 rounded-xl border border-dashed border-[#C9B9A8] bg-transparent hover:border-[#7a5c40] transition cursor-pointer w-full text-left">
-                      <span className="w-5 h-5 rounded-full border-2 border-[#7a5c40] flex items-center justify-center text-[#7a5c40] text-sm font-bold shrink-0">+</span>
-                      <p className="text-sm text-[#5c4033] font-medium">Add a different payment method</p>
-                    </button>
                   </div>
                 </div>
-              </div>
 
-              {/* Checkout footer */}
-              <div className="px-6 py-5 border-t border-[#C9B9A8] bg-[#EDE4D9] shrink-0">
-                <div className="flex justify-between items-center mb-4">
-                  <span className="font-bold text-[#3a2010]">Total:</span>
-                  <span className="font-bold text-[#3a2010] text-xl">₱{grandTotal.toFixed(2)}</span>
+                {/* Checkout footer */}
+                <div className="px-6 py-5 border-t border-[#C9B9A8] bg-[#EDE4D9] shrink-0">
+                  <div className="flex justify-between items-center mb-4">
+                    <span className="font-bold text-[#3a2010]">Total:</span>
+                    <span className="font-bold text-[#3a2010] text-xl">₱{grandTotal.toFixed(2)}</span>
+                  </div>
+                  <button
+                    onClick={handleConfirmOrder}
+                    disabled={!selectedPayment || !userAddress || orderStatus === "loading"}
+                    className="w-full py-3 bg-[#7a5c40] hover:bg-[#5c4033] text-white rounded-full font-bold text-base transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    {orderStatus === "loading" ? "Placing Order..." : "Check out"}
+                  </button>
+                  {!selectedPayment && (
+                    <p className="text-center text-xs text-[#8A6B52] mt-2">Please select a payment method to continue</p>
+                  )}
+                  {!userAddress && (
+                    <p className="text-center text-xs text-red-400 mt-1">Please select a delivery address</p>
+                  )}
                 </div>
-                <button
-                  onClick={handleConfirmOrder}
-                  disabled={!selectedPayment || orderStatus === "loading"}
-                  className="w-full py-3 bg-[#7a5c40] hover:bg-[#5c4033] text-white rounded-full font-bold text-base transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                >
-                  {orderStatus === "loading" ? "Placing Order..." : "Check out"}
-                </button>
-                {!selectedPayment && (
-                  <p className="text-center text-xs text-[#8A6B52] mt-2">Please select a payment method to continue</p>
-                )}
-              </div>
               </div>
             </div>
           )}
